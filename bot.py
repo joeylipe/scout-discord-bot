@@ -281,6 +281,7 @@ async def free_games(ctx):
 # ------------------------------
 # STEAM
 # ------------------------------
+
 def get_steam_free_candidates():
 
     url = "https://store.steampowered.com/search/results/"
@@ -353,7 +354,6 @@ def get_steam_app_details(app_id):
 
     return app_data.get("data")
 
-
 def get_steam_package_details(package_id):
 
     url = "https://store.steampowered.com/api/packagedetails"
@@ -410,10 +410,6 @@ def is_steam_free_to_keep(app):
             return True
 
     return False
-
-# ------------------------------
-# STEAM TEST COMMAND
-# ------------------------------
 
 # ------------------------------
 # STEAM TEST COMMAND
