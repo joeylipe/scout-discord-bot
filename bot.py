@@ -4,9 +4,10 @@
 
 import os
 import re
+import json
 import requests
 
-from datetime import datetime, timezone 
+from datetime import datetime, timezone
 
 import discord
 from discord.ext import commands
@@ -66,6 +67,7 @@ async def on_ready():
     print("[SCOUT] Ready.")
     print()
 
+
 # ==============================
 # #1 CORE / UTILITY COMMANDS
 # ==============================
@@ -74,9 +76,40 @@ async def on_ready():
 async def ping(ctx):
     await ctx.send(f"🏓 Pong! {round(bot.latency * 1000)}ms")
 
+
 # ==============================
 # #2 FREE GAMES
 # ==============================
+
+# ------------------------------
+# FREE GAME DATA
+# ------------------------------
+
+class FreeGame:
+
+    def __init__(
+        self,
+        title,
+        description,
+        store,
+        original_price,
+        url,
+        image_url,
+        available_until=None
+    ):
+
+        self.title = title
+        self.description = description
+        self.store = store
+        self.original_price = original_price
+        self.url = url
+        self.image_url = image_url
+        self.available_until = available_until
+
+
+# ------------------------------
+# EPIC
+# ------------------------------
 
 def get_epic_free_games():
 
@@ -108,6 +141,7 @@ def get_game_image(game):
                 return image.get("url")
 
     return None
+
 
 def get_game_url(game):
 
@@ -158,50 +192,109 @@ async def free_games(ctx):
 
             for offer in promotion.get("promotionalOffers", []):
 
-                discount = offer.get("discountSetting", {}).get("discountPercentage")
+                discount = offer.get(
+                    "discountSetting",
+                    {}
+                ).get(
+                    "discountPercentage"
+                )
 
                 if discount == 0:
 
-                    free_games_found.append({
-                        "game": game,
-                        "offer": offer
-                    })
+                    free_games_found.append(
+                        FreeGame(
+                            title=game.get(
+                                "title",
+                                "Unknown Game"
+                            ),
+                            description=game.get(
+                                "description",
+                                "No description available."
+                            ),
+                            store="Epic Games Store",
+                            original_price=(
+                                game.get("price", {})
+                                .get("totalPrice", {})
+                                .get("originalPrice")
+                            ),
+                            url=get_game_url(game),
+                            image_url=get_game_image(game),
+                            available_until=offer.get("endDate")
+                        )
+                    )
 
                     break
 
-            if free_games_found and free_games_found[-1]["game"] == game:
+            if (
+                free_games_found
+                and free_games_found[-1].title == game.get("title")
+            ):
                 break
+
+    # ------------------------------
+    # STEAM
+    # ------------------------------
+
+    candidates = get_steam_free_candidates()
+
+    for app_id in candidates:
+
+        app = get_steam_app_details(app_id)
+
+        if not app:
+            continue
+
+        if is_steam_free_to_keep(app):
+
+            price_info = app.get("price_overview")
+
+            original_price = None
+
+            if price_info:
+                original_price = price_info.get("initial")
+
+            free_games_found.append(
+                FreeGame(
+                    title=app.get(
+                        "name",
+                        "Unknown Game"
+                    ),
+                    description=app.get(
+                        "short_description",
+                        "No description available."
+                    ),
+                    store="Steam",
+                    original_price=original_price,
+                    url=(
+                        f"https://store.steampowered.com/app/"
+                        f"{app.get('steam_appid')}/"
+                    ),
+                    image_url=app.get(
+                        "header_image"
+                    ),
+                    available_until=get_steam_promotion_end(
+                        app.get("steam_appid")
+                    )
+                )
+            )
 
     if not free_games_found:
 
         await ctx.send(
             "🐻 **Scout**\n"
-            "No free games found on the Epic Games Store right now."
+            "No free games found right now."
         )
 
         return
 
-    for item in free_games_found:
+    for game in free_games_found:
 
-        game = item["game"]
-        offer = item["offer"]
+        title = game.title
+        description = game.description
+        game_url = game.url
+        image_url = game.image_url
 
-        title = game.get("title", "Unknown Game")
-        description = game.get(
-            "description",
-            "No description available."
-        )
-
-        game_url = get_game_url(game)
-        image_url = get_game_image(game)
-
-        # ------------------------------
-        # ORIGINAL PRICE
-        # ------------------------------
-
-        price_info = game.get("price", {})
-        total_price = price_info.get("totalPrice", {})
-        original_price = total_price.get("originalPrice")
+        original_price = game.original_price
 
         if original_price is not None:
 
@@ -212,11 +305,7 @@ async def free_games(ctx):
 
             original_price_text = "Price unavailable"
 
-        # ------------------------------
-        # END DATE
-        # ------------------------------
-
-        end_date = offer.get("endDate")
+        end_date = game.available_until
 
         if end_date:
 
@@ -224,7 +313,9 @@ async def free_games(ctx):
                 end_date.replace("Z", "+00:00")
             )
 
-            end_timestamp = int(end_datetime.timestamp())
+            end_timestamp = int(
+                end_datetime.timestamp()
+            )
 
             available_until = f"<t:{end_timestamp}:R>"
 
@@ -244,7 +335,7 @@ async def free_games(ctx):
 
         embed.add_field(
             name="Store",
-            value="Epic Games Store",
+            value=game.store,
             inline=False
         )
 
@@ -270,7 +361,7 @@ async def free_games(ctx):
             embed.set_image(url=image_url)
 
         embed.add_field(
-            name="🔗 View game on Epic Games Store",
+            name=f"🔗 View game on {game.store}",
             value=f"[Open {title}]({game_url})",
             inline=False
         )
@@ -310,7 +401,10 @@ def get_steam_free_candidates():
 
     data = response.json()
 
-    html = data.get("results_html", "")
+    html = data.get(
+        "results_html",
+        ""
+    )
 
     app_ids = []
 
@@ -347,12 +441,77 @@ def get_steam_app_details(app_id):
 
     data = response.json()
 
-    app_data = data.get(str(app_id), {})
+    app_data = data.get(
+        str(app_id),
+        {}
+    )
 
     if not app_data.get("success"):
         return None
 
     return app_data.get("data")
+
+
+def get_steam_promotion_end(app_id):
+
+    url = "https://api.steampowered.com/IStoreBrowseService/GetItems/v1"
+
+    request_data = {
+        "ids": [
+            {
+                "appid": app_id
+            }
+        ],
+        "context": {
+            "language": "english",
+            "country_code": "US",
+            "steam_realm": 1
+        },
+        "data_request": {
+            "include_all_purchase_options": True
+        }
+    }
+
+    response = requests.get(
+        url,
+        params={
+            "input_json": json.dumps(request_data)
+        },
+        timeout=10
+    )
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    store_items = data.get(
+        "response",
+        {}
+    ).get(
+        "store_items",
+        []
+    )
+
+    if not store_items:
+        return None
+
+    purchase_option = store_items[0].get(
+        "best_purchase_option",
+        {}
+    )
+
+    free_to_keep_ends = purchase_option.get(
+        "free_to_keep_ends"
+    )
+
+    if not free_to_keep_ends:
+        return None
+
+    return datetime.fromtimestamp(
+        free_to_keep_ends,
+        tz=timezone.utc
+    ).isoformat()
+
 
 def get_steam_package_details(package_id):
 
@@ -372,12 +531,16 @@ def get_steam_package_details(package_id):
 
     data = response.json()
 
-    package_data = data.get(str(package_id), {})
+    package_data = data.get(
+        str(package_id),
+        {}
+    )
 
     if not package_data.get("success"):
         return None
 
     return package_data.get("data")
+
 
 def is_steam_free_to_keep(app):
 
@@ -404,163 +567,17 @@ def is_steam_free_to_keep(app):
         if not package:
             continue
 
-        package_name = package.get("name", "").lower()
+        package_name = package.get(
+            "name",
+            ""
+        ).lower()
 
         if "limited free promotional package" in package_name:
             return True
 
     return False
 
-# ------------------------------
-# STEAM TEST COMMAND
-# ------------------------------
 
-@bot.command()
-async def steam_test(ctx):
-
-    await ctx.send("🐻 Scout is checking Steam...")
-
-    candidates = get_steam_free_candidates()
-
-    print()
-    print("[STEAM] Candidates found:", len(candidates))
-
-    verified_games = []
-
-    for app_id in candidates:
-
-        print(f"[STEAM] Checking AppID {app_id}...")
-
-        app = get_steam_app_details(app_id)
-
-        if not app:
-            continue
-
-        if is_steam_free_to_keep(app):
-
-            verified_games.append(app)
-
-            print(
-                f"[STEAM] FREE TO KEEP: "
-                f"{app.get('name', 'Unknown Game')}"
-            )
-
-    print(
-        f"[STEAM] Verified Free-to-Keep games: "
-        f"{len(verified_games)}"
-    )
-
-    if not verified_games:
-
-        await ctx.send(
-            "🐻 **Scout**\n"
-            "No Steam Free-to-Keep games found."
-        )
-
-        return
-
-    for game in verified_games:
-
-        title = game.get(
-            "name",
-            "Unknown Game"
-        )
-
-        description = game.get(
-            "short_description",
-            "No description available."
-        )
-
-        app_id = game.get(
-            "steam_appid"
-        )
-
-        game_url = (
-            f"https://store.steampowered.com/app/"
-            f"{app_id}/"
-        )
-
-        image_url = game.get(
-            "header_image"
-        )
-
-        # ------------------------------
-        # ORIGINAL PRICE
-        # ------------------------------
-
-        price_info = game.get(
-            "price_overview"
-        )
-
-        if price_info:
-
-            original_price = price_info.get(
-                "initial_formatted"
-            )
-
-            if not original_price:
-
-                original_price_cents = price_info.get(
-                    "initial"
-                )
-
-                if original_price_cents is not None:
-
-                    original_price = (
-                        f"${original_price_cents / 100:,.2f}"
-                    )
-
-            if not original_price:
-                original_price = "Price unavailable"
-
-        else:
-
-            original_price = "Price unavailable"
-
-        # ------------------------------
-        # DISCORD EMBED
-        # ------------------------------
-
-        embed = discord.Embed(
-            title=f"🎮 {title}",
-            description=description,
-            color=discord.Color.blue()
-        )
-
-        embed.add_field(
-            name="Store",
-            value="Steam",
-            inline=False
-        )
-
-        embed.add_field(
-            name="Was",
-            value=f"~~{original_price}~~",
-            inline=True
-        )
-
-        embed.add_field(
-            name="Price",
-            value="**FREE**",
-            inline=True
-        )
-
-        if image_url:
-
-            embed.set_image(
-                url=image_url
-            )
-
-        embed.add_field(
-            name="🔗 View game on Steam Store",
-            value=f"[Open {title}]({game_url})",
-            inline=False
-        )
-
-        await ctx.send(
-            embed=embed
-        )
-        
 # ==============================
 # START SCOUT
 # ==============================
